@@ -1,63 +1,93 @@
 pipeline {
-  agent any
-  parameters {
-    string(name: 'build_version', defaultValue: 'V1.0', description: 'Build version to use for Docker image')
-  }
-  stages {
-    stage('Checkout') {
-      steps {
-        git branch: 'main', url: 'https://github.com/VinayVallabhaneni/Board_Devops.git'
-      }
+    agent any
+    parameters {
+        string(name: 'build_version', defaultValue: 'V1.0', description: 'Build version to use for Docker image')
     }
-    stage('Build and Test') {
-      steps {
-        sh 'ls -ltr'
-        // build the project and create a JAR file
-        sh 'cd demo-java-app && mvn clean package'
-      }
-    }
-    stage('Static Code Analysis') {
-      environment {
-        SONAR_URL = "http://sonarqube:9000"
-      }
-      steps {
-        withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
-          sh 'cd demo-java-app && mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}'
-        }
-      }
-    }
-    stage('Build and Push Docker Image') {
-      environment {
-        DOCKER_IMAGE = "dreamy_jemison:${build_version}"
-        REGISTRY_CREDENTIALS = credentials('dockerhub')
-      }
-      steps {
-        script {
-            sh 'cd demo-java-app && docker build -t ${DOCKER_IMAGE} .'
-            def dockerImage = docker.image("${DOCKER_IMAGE}")
-            docker.withRegistry('https://index.docker.io/v1/', "dockerhub") {
-                dockerImage.push()
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([$class: 'GitSCM',
+                          branches: [[name: '*/main']],
+                          userRemoteConfigs: [[url: 'https://github.com/VinayVallabhaneni/Board_Devops.git']],
+                          extensions: [[$class: 'DisableChangelog']]])
             }
         }
-      }
-    }
-    stage('Update Deployment File') {
-        environment {
-            GIT_REPO_NAME = "Board_Devops"
-            GIT_USER_NAME = "VinayVallabhaneni"
+        stage('Build and Test') {
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh './mvnw clean install'
+                    } else {
+                        bat 'mvnw.cmd clean install'
+                    }
+                }
+            }
         }
-        steps {
-            withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
-                sh '''
-                    git config user.email "vinaybobby1122@gmail.com"
-                    git config user.name "VinayVallabhaneni"
-                    sed -i "s/tag: .*/tag: \"${build_version}\"/" helm/app/values.yaml
-                    git add helm/app/values.yaml
-                    git commit -m "Update deployment image to version ${build_version}"
-                    git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
-                '''
+        stage('Static Code Analysis') {
+            environment {
+                SONAR_URL = "http://sonarqube:9000"
+            }
+            steps {
+                withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
+                    script {
+                        if (isUnix()) {
+                            sh 'cd demo-java-app && mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}'
+                        } else {
+                            bat 'cd demo-java-app && mvnw.cmd sonar:sonar -Dsonar.login=%SONAR_AUTH_TOKEN% -Dsonar.host.url=%SONAR_URL%'
+                        }
+                    }
+                }
+            }
+        }
+        stage('Build and Push Docker Image') {
+            environment {
+                DOCKER_IMAGE = "dreamy_jemison:${build_version}"
+                REGISTRY_CREDENTIALS = credentials('dockerhub')
+            }
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh 'cd demo-java-app && docker build -t ${DOCKER_IMAGE} .'
+                    } else {
+                        bat 'cd demo-java-app && docker build -t %DOCKER_IMAGE% .'
+                    }
+                    def dockerImage = docker.image("${DOCKER_IMAGE}")
+                    docker.withRegistry('https://index.docker.io/v1/', "dockerhub") {
+                        dockerImage.push()
+                    }
+                }
+            }
+        }
+        stage('Update Deployment File') {
+            environment {
+                GIT_REPO_NAME = "Board_Devops"
+                GIT_USER_NAME = "VinayVallabhaneni"
+            }
+            steps {
+                withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+                    script {
+                        if (isUnix()) {
+                            sh '''
+                                git config user.email "vinaybobby1122@gmail.com"
+                                git config user.name "VinayVallabhaneni"
+                                sed -i "s/tag: .*/tag: \\"${build_version}\\"/" helm/app/values.yaml
+                                git add helm/app/values.yaml
+                                git commit -m "Update deployment image to version ${build_version}"
+                                git push https://${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:main
+                            '''
+                        } else {
+                            bat '''
+                                git config user.email "vinaybobby1122@gmail.com"
+                                git config user.name "VinayVallabhaneni"
+                                powershell -Command "(Get-Content helm/app/values.yaml) -replace 'tag: .*', 'tag: \\"%build_version%\\"' | Set-Content helm/app/values.yaml"
+                                git add helm/app/values.yaml
+                                git commit -m "Update deployment image to version %build_version%"
+                                git push https://%GITHUB_TOKEN%@github.com/%GIT_USER_NAME%/%GIT_REPO_NAME% HEAD:main
+                            '''
+                        }
+                    }
+                }
             }
         }
     }
-  }
 }
